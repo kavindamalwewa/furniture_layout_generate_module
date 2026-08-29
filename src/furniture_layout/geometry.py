@@ -46,3 +46,15 @@ def blocks_opening(p: Placement, opening: Opening, room: Room) -> bool:
 def wall_distance(p: Placement, room: Room) -> float:
     return min(p.x, p.y, room.width - p.x - p.width, room.length - p.y - p.length)
 
+
+def rectangle_distance(a: Placement, b: Placement) -> float:
+    """Return the shortest edge-to-edge distance between two rectangles."""
+    dx = max(a.x - (b.x + b.width), b.x - (a.x + a.width), 0.0)
+    dy = max(a.y - (b.y + b.length), b.y - (a.y + a.length), 0.0)
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def overlap_area(a: Placement, b: Placement) -> float:
+    width = max(0.0, min(a.x + a.width, b.x + b.width) - max(a.x, b.x))
+    length = max(0.0, min(a.y + a.length, b.y + b.length) - max(a.y, b.y))
+    return width * length

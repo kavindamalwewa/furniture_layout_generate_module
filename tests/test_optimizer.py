@@ -54,7 +54,34 @@ class LayoutOptimizerTests(unittest.TestCase):
         self.assertTrue(layouts[1].selected)
         self.assertFalse(layouts[0].selected)
 
+    def test_new_spatial_rules_reward_the_better_layout(self):
+        room = Room(
+            "scoring-room", 6.0, 5.0,
+            openings=(
+                Opening("door", "south", 2.0, 0.9, 0.6),
+                Opening("window", "north", 2.0, 1.5, 0.3),
+            ),
+        )
+        items = [
+            FurnitureItem("table", "Table", "table", 1.0, 0.6),
+            FurnitureItem("chair", "Chair", "seating", 0.7, 0.7),
+        ]
+        expanded = [(item, 1) for item in items]
+        better = [
+            Placement("table", 1, 2.2, 4.0, 1.0, 0.6, 0),
+            Placement("chair", 1, 5.0, 2.0, 0.7, 0.7, 0),
+        ]
+        worse = [
+            Placement("table", 1, 2.2, 1.0, 1.0, 0.6, 0),
+            Placement("chair", 1, 3.25, 1.0, 0.7, 0.7, 0),
+        ]
+        good_score = LayoutOptimizer._score(room, expanded, better)
+        bad_score = LayoutOptimizer._score(room, expanded, worse)
+        self.assertGreater(good_score["window_proximity"], bad_score["window_proximity"])
+        self.assertGreater(good_score["door_clearance"], bad_score["door_clearance"])
+        self.assertGreater(good_score["furniture_spacing"], bad_score["furniture_spacing"])
+        self.assertGreater(good_score["central_open_space"], bad_score["central_open_space"])
+
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -5,7 +5,15 @@ import math
 import random
 from dataclasses import replace
 
-from .geometry import blocks_opening, inside_room, rectangles_overlap, wall_distance
+from .geometry import (
+    blocks_opening,
+    inside_room,
+    opening_clearance_rect,
+    overlap_area,
+    rectangle_distance,
+    rectangles_overlap,
+    wall_distance,
+)
 from .models import FurnitureItem, Layout, Placement, Room
 
 
@@ -116,31 +124,66 @@ class LayoutOptimizer:
         used_area = sum(p.width * p.length for p in placements)
         density = used_area / room_area
         target_density = 0.35
-        space_use = max(0.0, 25.0 * (1.0 - abs(density - target_density) / target_density))
+        space_use = max(0.0, 10.0 * (1.0 - abs(density - target_density) / target_density))
 
         item_by_id = {item.id: item for item, _ in expanded}
         wall_items = [p for p in placements if item_by_id[p.furniture_id].wall_preferred]
-        wall_alignment = 20.0 if not wall_items else 20.0 * sum(
+        wall_alignment = 10.0 if not wall_items else 10.0 * sum(
             max(0.0, 1.0 - wall_distance(p, room) / 0.75) for p in wall_items
         ) / len(wall_items)
 
-        centers = [p.center for p in placements]
-        if len(centers) < 2:
-            distribution = 15.0
+        if len(placements) < 2:
+            furniture_spacing = 15.0
         else:
-            cx, cy = room.width / 2, room.length / 2
-            average_radius = sum(math.hypot(c.x - cx, c.y - cy) for c in centers) / len(centers)
-            ideal = math.hypot(room.width, room.length) / 4
-            distribution = 15.0 * max(0.0, 1.0 - abs(average_radius - ideal) / max(ideal, 0.01))
+            gaps = [
+                rectangle_distance(a, b)
+                for index, a in enumerate(placements)
+                for b in placements[index + 1 :]
+            ]
+            furniture_spacing = 15.0 * sum(min(1.0, gap / 0.75) for gap in gaps) / len(gaps)
 
-        edge_gaps = [wall_distance(p, room) for p in placements]
-        accessibility = 30.0 * min(1.0, (sum(edge_gaps) / max(len(edge_gaps), 1) + 0.5) / 1.25)
+        central_zone = Placement(
+            "central-zone", 0,
+            room.width * 0.3, room.length * 0.3,
+            room.width * 0.4, room.length * 0.4, 0,
+        )
+        central_area = central_zone.width * central_zone.length
+        blocked_center = min(central_area, sum(overlap_area(p, central_zone) for p in placements))
+        central_open_space = 20.0 * (1.0 - blocked_center / central_area)
+
+        doors = [opening for opening in room.openings if opening.kind == "door"]
+        if not doors or not placements:
+            door_clearance = 20.0
+        else:
+            door_zones = [
+                Placement("door-zone", i, *opening_clearance_rect(opening, room), 0)
+                for i, opening in enumerate(doors)
+            ]
+            nearest_gap = min(rectangle_distance(p, zone) for p in placements for zone in door_zones)
+            door_clearance = 20.0 * min(1.0, nearest_gap / 1.0)
+
+        windows = [opening for opening in room.openings if opening.kind == "window"]
+        light_items = [
+            p for p in placements
+            if item_by_id[p.furniture_id].category in {"table", "desk"}
+        ]
+        if not windows or not light_items:
+            window_proximity = 15.0
+        else:
+            window_zones = [
+                Placement("window-zone", i, *opening_clearance_rect(opening, room), 0)
+                for i, opening in enumerate(windows)
+            ]
+            distances = [min(rectangle_distance(p, zone) for zone in window_zones) for p in light_items]
+            window_proximity = 15.0 * sum(max(0.0, 1.0 - distance / 2.0) for distance in distances) / len(distances)
+
         completeness = 10.0 * len(placements) / max(len(expanded), 1)
         return {
-            "accessibility": round(accessibility, 2),
+            "door_clearance": round(door_clearance, 2),
+            "central_open_space": round(central_open_space, 2),
+            "window_proximity": round(window_proximity, 2),
+            "furniture_spacing": round(furniture_spacing, 2),
             "space_utilization": round(space_use, 2),
             "wall_alignment": round(wall_alignment, 2),
-            "distribution": round(distribution, 2),
             "completeness": round(completeness, 2),
         }
-
