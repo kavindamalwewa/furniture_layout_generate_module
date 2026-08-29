@@ -1,0 +1,21 @@
+{
+  "room": {
+    "id": "living-room-1",
+    "room_type": "living_room",
+    "width": 5.5,
+    "length": 4.5,
+    "openings": [
+      {"kind": "door", "wall": "south", "offset": 0.5, "width": 0.9, "clearance": 1.0},
+      {"kind": "window", "wall": "north", "offset": 1.8, "width": 2.0, "clearance": 0.45}
+    ]
+  },
+  "furniture": [
+    {"id": "sofa", "name": "Three-seat sofa", "category": "seating", "width": 2.2, "length": 0.9, "wall_preferred": true, "clearance": 0.25},
+    {"id": "chair", "name": "Armchair", "category": "seating", "width": 0.8, "length": 0.8, "quantity": 2},
+    {"id": "coffee-table", "name": "Coffee table", "category": "table", "width": 1.1, "length": 0.6},
+    {"id": "tv-unit", "name": "TV unit", "category": "storage", "width": 1.6, "length": 0.45, "wall_preferred": true}
+  ],
+  "layout_count": 5,
+  "seed": 42
+}
+
