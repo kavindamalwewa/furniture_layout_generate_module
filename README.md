@@ -39,6 +39,25 @@ python -m furniture_layout.demo
 
 Open `output/layout-test-report.html` in a browser to compare the six generated layouts, inspect furniture placement, and review every score component.
 
+## Interactive sample web interface
+
+Run the dependency-free local test server:
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m furniture_layout.web
+```
+
+Then open `http://127.0.0.1:8080`. The interface calls the real optimizer, supports room-type selection, regeneration with a new seed, layout selection, visual placement previews, and score comparison.
+
+If Node.js/npm is installed, the same server can be started with:
+
+```powershell
+npm run dev
+```
+
+Run the automated module tests with `npm test`.
+
 ## Test
 
 ```powershell

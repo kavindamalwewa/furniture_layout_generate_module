@@ -1,0 +1,10 @@
+{
+  "name": "sparkshift-furniture-layout-module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone test launcher for the Sparkshift furniture layout module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "test": "node scripts/test.mjs"
+  }
+}
