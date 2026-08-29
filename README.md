@@ -28,6 +28,17 @@ $env:PYTHONPATH = "src"
 python -m furniture_layout.cli examples/living_room.json
 ```
 
+## Visual standalone test
+
+This generates a local HTML test report only; it is not the production web application.
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m furniture_layout.demo
+```
+
+Open `output/layout-test-report.html` in a browser to compare the six generated layouts, inspect furniture placement, and review every score component.
+
 ## Test
 
 ```powershell

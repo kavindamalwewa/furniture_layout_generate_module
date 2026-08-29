@@ -11,7 +11,7 @@ dependencies = []
 
 [project.scripts]
 sparkshift-layout = "furniture_layout.cli:main"
+sparkshift-layout-demo = "furniture_layout.demo:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

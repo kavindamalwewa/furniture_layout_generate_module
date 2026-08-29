@@ -15,7 +15,6 @@
     {"id": "coffee-table", "name": "Coffee table", "category": "table", "width": 1.1, "length": 0.6},
     {"id": "tv-unit", "name": "TV unit", "category": "storage", "width": 1.6, "length": 0.45, "wall_preferred": true}
   ],
-  "layout_count": 5,
+  "layout_count": 6,
   "seed": 42
 }
-
