@@ -22,7 +22,8 @@ class LayoutOptimizerTests(unittest.TestCase):
         layouts = LayoutOptimizer(attempts_per_layout=60).generate(self.room, self.items, 3, seed=7)
         self.assertEqual(3, len(layouts))
         self.assertTrue(layouts[0].recommended)
-        self.assertGreaterEqual(layouts[0].score, layouts[-1].score)
+        self.assertEqual(sorted((layout.score for layout in layouts), reverse=True), [layout.score for layout in layouts])
+        self.assertEqual(1, sum(layout.recommended for layout in layouts))
         for layout in layouts:
             for index, placement in enumerate(layout.placements):
                 self.assertTrue(inside_room(placement, self.room))

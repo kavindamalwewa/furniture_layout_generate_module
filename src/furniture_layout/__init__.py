@@ -2,7 +2,9 @@
 
 from .models import (
     FurnitureItem,
+    FurnitureRelation,
     Layout,
+    Obstacle,
     Opening,
     Placement,
     Point,
@@ -13,9 +15,11 @@ from .service import generate_layouts, select_layout
 
 __all__ = [
     "FurnitureItem",
+    "FurnitureRelation",
     "Layout",
     "LayoutOptimizer",
     "NoValidLayoutError",
+    "Obstacle",
     "Opening",
     "Placement",
     "Point",
@@ -23,4 +27,3 @@ __all__ = [
     "generate_layouts",
     "select_layout",
 ]
-

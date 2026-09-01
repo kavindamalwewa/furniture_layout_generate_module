@@ -15,6 +15,10 @@
     {"id": "coffee-table", "name": "Coffee table", "category": "table", "width": 1.1, "length": 0.6},
     {"id": "tv-unit", "name": "TV unit", "category": "storage", "width": 1.6, "length": 0.45, "wall_preferred": true}
   ],
+  "relations": [
+    {"source_id": "coffee-table", "target_id": "sofa", "kind": "near", "min_distance": 0.3, "max_distance": 0.9},
+    {"source_id": "tv-unit", "target_id": "sofa", "kind": "opposite", "min_distance": 1.2, "max_distance": 3.5, "weight": 1.2}
+  ],
   "layout_count": 6,
   "seed": 42
 }

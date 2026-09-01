@@ -22,6 +22,22 @@ def _svg(room: dict, layout: dict, furniture: dict[str, dict]) -> str:
     width = float(room["width"]) * scale
     height = float(room["length"]) * scale
     shapes: list[str] = []
+    polygon = room.get("polygon", [])
+    if polygon:
+        points = " ".join(
+            f"{float(point[0]) * scale:.1f},{height - float(point[1]) * scale:.1f}"
+            for point in polygon
+        )
+        boundary = f'<polygon points="{points}" fill="#f8fafc" stroke="#334155" stroke-width="4"/>'
+    else:
+        boundary = f'<rect width="{width:.1f}" height="{height:.1f}" fill="#f8fafc" stroke="#334155" stroke-width="4"/>'
+    for obstacle in room.get("obstacles", []):
+        x = float(obstacle["x"]) * scale
+        y = height - (float(obstacle["y"]) + float(obstacle["length"])) * scale
+        shapes.append(
+            f'<rect x="{x:.1f}" y="{y:.1f}" width="{float(obstacle["width"]) * scale:.1f}" '
+            f'height="{float(obstacle["length"]) * scale:.1f}" fill="#ef444455" stroke="#dc2626"/>'
+        )
     for placement in layout["placements"]:
         item = furniture[placement["furniture_id"]]
         x = placement["position_x"] * scale
@@ -38,24 +54,28 @@ def _svg(room: dict, layout: dict, furniture: dict[str, dict]) -> str:
             f'dominant-baseline="middle">{html.escape(item["name"][:14])}</text></g>'
         )
     for opening in room.get("openings", []):
-        offset = float(opening["offset"]) * scale
-        span = float(opening["width"]) * scale
-        wall = opening["wall"]
-        if wall == "south":
-            x1, y1, x2, y2 = offset, height, offset + span, height
-        elif wall == "north":
-            x1, y1, x2, y2 = offset, 0, offset + span, 0
-        elif wall == "west":
-            x1, y1, x2, y2 = 0, height - offset, 0, height - offset - span
+        if opening.get("segment"):
+            first, second = opening["segment"]
+            x1, y1 = float(first[0]) * scale, height - float(first[1]) * scale
+            x2, y2 = float(second[0]) * scale, height - float(second[1]) * scale
         else:
-            x1, y1, x2, y2 = width, height - offset, width, height - offset - span
+            offset = float(opening["offset"]) * scale
+            span = float(opening["width"]) * scale
+            wall = opening["wall"]
+            if wall == "south":
+                x1, y1, x2, y2 = offset, height, offset + span, height
+            elif wall == "north":
+                x1, y1, x2, y2 = offset, 0, offset + span, 0
+            elif wall == "west":
+                x1, y1, x2, y2 = 0, height - offset, 0, height - offset - span
+            else:
+                x1, y1, x2, y2 = width, height - offset, width, height - offset - span
         color = "#22c55e" if opening["kind"] == "door" else "#38bdf8"
         shapes.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{color}" stroke-width="7"><title>{opening["kind"]}</title></line>')
     return (
         f'<svg viewBox="-12 -12 {width + 24:.1f} {height + 24:.1f}" role="img" '
         f'aria-label="{html.escape(layout["id"])}">'
-        f'<rect width="{width:.1f}" height="{height:.1f}" fill="#f8fafc" stroke="#334155" stroke-width="4"/>'
-        + "".join(shapes) + "</svg>"
+        + boundary + "".join(shapes) + "</svg>"
     )
 
 
@@ -108,4 +128,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
