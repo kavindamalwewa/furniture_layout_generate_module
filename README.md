@@ -61,11 +61,23 @@ python -m furniture_layout.demo
 
 Open `output/layout-test-report.html` in a browser to compare the six generated layouts, inspect furniture placement, and review every score component.
 
+## Room-type layout engines
+
+A single sampler cannot satisfy bedroom, living room, kitchen, and bathroom rules at once, so `POST /api/layouts/generate` first decides the room type, then dispatches to the engine that matches it. The type comes from the request `roomType` field; if it is absent, a request that asks for both a sofa and a TV is treated as a living room. Anything without a dedicated engine falls back to the generic deterministic grid sampler.
+
+**Living room** (`furniture_layout.living_room`) constructs the layout in a fixed order instead of sampling it. Every living-room rule is a **preference that shapes the ranking and the score, never a filter that blocks a result** — so the engine returns layouts whenever the sofa and TV physically fit:
+
+1. Place the sofa flush against the longest wall, in the widest stretch left clear of door approaches. A sofa may sit under a window; wall-hugging pieces always put their long side along the wall regardless of how the source drawing was oriented.
+2. Place the TV unit on a wall, preferring one with no window that faces the sofa. If no window-free wall is available it goes on a windowed wall; if no wall faces the sofa it goes on the nearest one.
+3. Place the coffee table on the sofa-to-TV line, trying a few offsets and both orientations. If nothing stays clear it is left out.
+
+Each unmet preference (`sofa_not_longest`, `tv_window_wall`, `tv_not_facing`, `near_door`, `coffee_missing`) subtracts points and is listed under `penalties`; the layout's `validity` is `"review"` when any penalty applied. Every `(sofa wall, TV wall)` pairing is tried, ranked so the ones that satisfy the most rules come first, then a few offset/orientation tweaks per pairing. Results are validated and scored with the shared helpers, so the response contract matches the generic engine (`scoreKind` is `constructive-living-room`); the only arrangement never shipped is furniture overlapping furniture. Layouts with all three pieces are preferred over sofa+TV-only ones. Only the sofa, TV, and coffee table are arranged; other requested items are reported under `assumptions`. `no-feasible-layout` is returned only when the room is genuinely smaller than the sofa or TV at the confirmed scale.
+
 ## API actions
 
 Project/import/calibration/generation/validation/save/export actions are available under `/api`. Review helpers preserve bounded wall offsets, ambiguous openings, shared doorway room IDs, and separate sealed extraction versus traversable navigation policies. Server JSON files are stored under `output/projects`.
 
-Post the polygon request to `POST /api/layouts/generate`. The algorithm samples deterministic grid candidates, rejects footprints outside concave polygons or inside holes, rejects collisions with furniture/fixed obstacles/opening keep-clear regions, checks portal circulation, removes duplicate layouts, scores feasible alternatives, and returns the best options in descending score order.
+Post the polygon request to `POST /api/layouts/generate`. For a living room the constructive engine above runs; otherwise the algorithm samples deterministic grid candidates, rejects footprints outside concave polygons or inside holes, rejects collisions with furniture/fixed obstacles/opening keep-clear regions, checks portal circulation, removes duplicate layouts, scores feasible alternatives, and returns the best options in descending score order.
 
 If Node.js/npm is installed, the same server can be started with:
 

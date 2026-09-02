@@ -176,7 +176,15 @@ def _semantic_verdict(request: dict[str, Any], placements: list[dict[str, Any]],
             squared=max(vx*vx+vy*vy,EPS); progress=((cx-sx)*vx+(cy-sy)*vy)/squared
             perpendicular=abs(vx*(sy-cy)-(sx-cx)*vy)/math.sqrt(squared)/units_per_meter
             coffee_quality=(1.0-min(perpendicular/.8,1.0)) if .2<=progress<=.8 else .2
+            if request.get("roomStrategy") == "living_room" and not (.2 <= progress <= .8 and perpendicular <= .8):
+                reasons.append("Coffee table must be centred between the sofa and TV unit")
         functional_score=max(0.0,20.0*alignment*distance_quality*(.35+.65*coffee_quality))
+        if request.get("roomStrategy") == "living_room":
+            walls=list(zip(polygon["outer"],polygon["outer"][1:]+polygon["outer"][:1]));lengths=[math.dist(a,b) for a,b in walls]
+            wall_index,_=_nearest_wall((sx,sy),polygon)
+            edge_gap=min(_point_segment_distance(tuple(vertex),*walls[wall_index]) for vertex in _footprint(sofa))/units_per_meter
+            if lengths[wall_index] < max(lengths)*.9 or edge_gap > .35:
+                reasons.append("Sofa must be placed against one of the longest walls")
     return not reasons, reasons, round(functional_score, 2)
 
 
@@ -247,16 +255,30 @@ def generate_polygon_layouts(request: dict[str, Any]) -> dict[str, Any]:
         raise ProjectValidationError("A confirmed two-point scale is required before layout generation")
     polygon=request.get("polygon")
     if not polygon: raise ProjectValidationError("A reviewed room polygon is required before layout generation")
+    from .living_room import LIVING_ROOM_TYPES, generate_living_room_layouts, infer_room_type
+    room_type=str(request.get("roomType") or request.get("room_type") or "").strip().lower().replace(" ","-").replace("_","-")
+    if not room_type: room_type=infer_room_type(request.get("furniture",[]))
+    if room_type in LIVING_ROOM_TYPES: return generate_living_room_layouts(request)
     revision=int(request.get("inputRevision",0)); seed=int(request.get("seed",0)); budget_ms=min(10_000,max(50,int(request.get("searchBudgetMs",1500))))
     meters_per_unit=float(request.get("scale",{}).get("metersPerPixel",1.0))
     if meters_per_unit <= 0: raise ProjectValidationError("scale.metersPerPixel must be positive")
     units_per_meter=1.0/meters_per_unit
     count=min(6,max(1,int(request.get("count",6)))); grid=max(.1,float(request.get("grid",.25)))*units_per_meter; rng=random.Random(seed); box=polygon_bbox(polygon)
+    item_ids=[str(spec.get("id","")).lower() for spec in request.get("furniture",[])]
+    declared_type=str(request.get("roomType","")).lower().replace(" ","_").replace("-","_")
+    living_room=declared_type in {"living_room","livingroom"} or (any("sofa" in item for item in item_ids) and any("tv" in item for item in item_ids))
+    request={**request,"roomStrategy":"living_room" if living_room else "generic"}
     specs=[]
     for spec in request.get("furniture",[]):
         quantity=int(spec.get("quantity",1))
         for instance in range(quantity): specs.append((spec,instance+1))
-    specs.sort(key=lambda pair:float(pair[0]["width"])*float(pair[0]["depth"]),reverse=True)
+    if living_room:
+        def living_priority(pair):
+            item=str(pair[0].get("id","")).lower()
+            priority=0 if "sofa" in item or "couch" in item else 1 if "tv" in item else 2 if "coffee" in item else 3
+            return priority,-float(pair[0]["width"])*float(pair[0]["depth"])
+        specs.sort(key=living_priority)
+    else: specs.sort(key=lambda pair:float(pair[0]["width"])*float(pair[0]["depth"]),reverse=True)
     candidates=[]; start=time.monotonic(); explored=0
     def positions(spec):
         rotations=spec.get("allowedRotations",[0,90]); result=[]
@@ -267,6 +289,11 @@ def generate_polygon_layouts(request: dict[str, Any]) -> dict[str, Any]:
         rng.shuffle(result); return result
     pools=[positions(s) for s,_ in specs]
     attempts=max(300,count*300)
+    walls=list(zip(polygon["outer"],polygon["outer"][1:]+polygon["outer"][:1]));wall_lengths=[math.dist(a,b) for a,b in walls]
+    window_walls=set()
+    for opening in request.get("openings",[]):
+        if opening.get("kind")=="window" and opening.get("span"):
+            a,b=opening["span"];window_walls.add(_nearest_wall(((a[0]+b[0])/2,(a[1]+b[1])/2),polygon)[0])
     for _ in range(attempts):
         if (time.monotonic()-start)*1000>=budget_ms: break
         placements=[]
@@ -274,12 +301,29 @@ def generate_polygon_layouts(request: dict[str, Any]) -> dict[str, Any]:
             chosen=None
             offset=rng.randrange(len(pool)) if pool else 0
             trial_pool=(pool[offset:]+pool[:offset])[:min(len(pool),200)]
-            if "coffee" in str(spec.get("id","")).lower():
+            item_key=str(spec.get("id","")).lower();width=float(spec['width'])*units_per_meter;depth=float(spec['depth'])*units_per_meter
+            if living_room and ("sofa" in item_key or "couch" in item_key):
+                ranked=[]
+                for x,y,rotation in pool:
+                    temp={"x":x,"y":y,"width":width,"depth":depth,"rotation":rotation};wall_index,_=_nearest_wall(_centre(temp),polygon)
+                    edge_gap=min(_point_segment_distance(tuple(vertex),*walls[wall_index]) for vertex in _footprint(temp))
+                    if wall_lengths[wall_index]>=max(wall_lengths)*.9 and edge_gap<=grid*.15:ranked.append((x,y,rotation))
+                rng.shuffle(ranked);trial_pool=ranked[:160]
+            elif living_room and "tv" in item_key:
+                sofa=next((p for p in placements if any(k in str(p["catalogId"]).lower() for k in ("sofa","couch"))),None);ranked=[]
+                for x,y,rotation in pool:
+                    temp={"x":x,"y":y,"width":width,"depth":depth,"rotation":rotation};wall_index,wall_gap=_nearest_wall(_centre(temp),polygon)
+                    if wall_index in window_walls or wall_gap>max(width,depth)/2+.3*units_per_meter:continue
+                    sx,sy=_centre(sofa);tx,ty=_centre(temp);angle=math.radians(float(sofa.get("rotation",0)));front=(-math.sin(angle),math.cos(angle));distance=max(math.hypot(tx-sx,ty-sy),EPS)
+                    alignment=abs(((tx-sx)*front[0]+(ty-sy)*front[1])/distance);ranked.append((-(alignment*3-abs(distance/units_per_meter-2.7)),(x,y,rotation)))
+                ranked.sort(key=lambda value:value[0]);best=[candidate for _,candidate in ranked[:200]];head=best[:40];rng.shuffle(head);trial_pool=head+best[40:]
+            elif "coffee" in item_key:
                 sofa=next((p for p in placements if any(k in str(p["catalogId"]).lower() for k in ("sofa","couch"))),None)
                 tv=next((p for p in placements if "tv" in str(p["catalogId"]).lower()),None)
                 if sofa and tv:
                     sx,sy=_centre(sofa);tx,ty=_centre(tv);target=((sx+tx)/2,(sy+ty)/2)
-                    trial_pool=sorted(pool,key=lambda candidate:math.hypot(candidate[0]-target[0],candidate[1]-target[1]))[:min(len(pool),300)]
+                    ranked=sorted(pool,key=lambda candidate:math.hypot(candidate[0]+width/2-target[0],candidate[1]+depth/2-target[1]))[:min(len(pool),300)]
+                    head=ranked[:30];rng.shuffle(head);trial_pool=head+ranked[30:]
             for x,y,rotation in trial_pool:
                 width_m=float(spec['width']);depth_m=float(spec['depth']);width=width_m*units_per_meter;depth=depth_m*units_per_meter
                 explored+=1; placement={"id":f"{spec['id']}-{instance}","catalogId":spec['id'],"x":x,"y":y,"width":width,"depth":depth,"widthMeters":width_m,"depthMeters":depth_m,"heightMeters":spec.get("height"),"rotation":rotation,"frontDirection":rotation,"locked":bool(spec.get("locked",False)),"required":bool(spec.get("required",True)),"wallAttached":bool(spec.get("wallAttached",False)),"supportWallId":spec.get("supportWallId"),"supportKind":spec.get("supportKind"),"accessPoint":spec.get("accessPoint"),"positionMeters":{"x":(x-box['x'])*meters_per_unit,"y":(y-box['y'])*meters_per_unit}}

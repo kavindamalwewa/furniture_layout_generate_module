@@ -1,6 +1,7 @@
 {
   "requestId": "demo-room-request",
   "roomId": "room-1",
+  "roomType": "living-room",
   "inputRevision": 1,
   "polygon": {
     "outer": [[100, 100], [650, 100], [650, 500], [100, 500]],
@@ -22,6 +23,7 @@
   "fixedObstacles": [],
   "furniture": [
     {"id": "sofa", "width": 2.1, "depth": 0.9, "height": 0.85, "quantity": 1, "required": true, "allowedRotations": [0, 90, 180, 270]},
+    {"id": "tv-unit", "width": 1.6, "depth": 0.4, "height": 0.5, "quantity": 1, "required": true, "allowedRotations": [0, 90, 180, 270]},
     {"id": "coffee-table", "width": 1.0, "depth": 0.55, "height": 0.45, "quantity": 1, "required": true, "allowedRotations": [0, 90]},
     {"id": "chair", "width": 0.75, "depth": 0.75, "height": 0.9, "quantity": 2, "required": false, "allowedRotations": [0, 90, 180, 270]}
   ],

@@ -3,7 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from furniture_layout.polygon_engine import _layout_score_components, _semantic_verdict, footprint_inside, generate_polygon_layouts, rectangle_ring, validate_layout
+import math
+
+from furniture_layout.living_room import generate_living_room_layouts, infer_room_type
+from furniture_layout.polygon_engine import _layout_score_components, _opening_keep_clear, _semantic_verdict, footprint_inside, generate_polygon_layouts, rectangle_ring, rings_overlap, validate_layout
 from furniture_layout.project import ProjectStore, ProjectValidationError, calibrate_scale, import_legacy, legacy_layouts_to_project, new_project
 from furniture_layout.extraction import associate_openings, bounded_snap_segments, extraction_contract
 
@@ -105,6 +108,153 @@ class PolygonTests(unittest.TestCase):
         good_score=sum(_layout_score_components(request,good,1,20).values())
         bad_score=sum(_layout_score_components(request,bad,1,20).values())
         self.assertGreater(good_score,bad_score+20)
+
+    def test_living_strategy_requires_long_wall_sofa_and_centered_coffee_table(self):
+        polygon={"outer":[[0,0],[6,0],[6,5],[0,5]],"holes":[]}
+        request={"polygon":polygon,"openings":[],"roomStrategy":"living_room"}
+        valid=[{"catalogId":"sofa","x":2,"y":0,"width":2,"depth":.8,"rotation":0},
+               {"catalogId":"tv-unit","x":2.5,"y":4.6,"width":1,"depth":.3,"rotation":0},
+               {"catalogId":"coffee-table","x":2.5,"y":2.3,"width":1,"depth":.5,"rotation":0}]
+        self.assertTrue(_semantic_verdict(request,valid,1)[0])
+        invalid=[{**valid[0],"x":0,"y":1.5,"rotation":90},valid[1],
+                 {**valid[2],"x":.1}]
+        verdict=_semantic_verdict(request,invalid,1)
+        self.assertFalse(verdict[0]);self.assertTrue(any("Coffee table" in reason or "longest walls" in reason for reason in verdict[1]))
+
+def _centroid(placement):
+    ring = rectangle_ring(placement["x"], placement["y"], placement["width"], placement["depth"], placement["rotation"])
+    return sum(p[0] for p in ring) / 4, sum(p[1] for p in ring) / 4
+
+
+class LivingRoomTests(unittest.TestCase):
+    def _request(self, **overrides):
+        request = {
+            "requestId": "lr", "roomId": "living-1", "roomType": "living-room", "inputRevision": 4,
+            "polygon": {"outer": [[0, 0], [600, 0], [600, 400], [0, 400]], "holes": []},
+            "scale": {"confirmed": True, "metersPerPixel": 0.01},
+            "openings": [
+                {"id": "door-1", "kind": "door", "span": [[0, 120], [0, 220]], "clearance": 0.9},
+                {"id": "win-1", "kind": "window", "span": [[220, 0], [400, 0]], "clearance": 0.35},
+            ],
+            "fixedObstacles": [],
+            "furniture": [
+                {"id": "sofa", "width": 2.2, "depth": 0.9, "height": 0.85, "required": True},
+                {"id": "tv-unit", "width": 1.6, "depth": 0.4, "height": 0.5, "required": True},
+                {"id": "coffee-table", "width": 1.1, "depth": 0.6, "height": 0.45, "required": True},
+            ],
+            "count": 6, "seed": 5,
+        }
+        request.update(overrides)
+        return request
+
+    def test_polygon_engine_dispatches_living_rooms_to_the_constructive_engine(self):
+        request = self._request()
+        by_type = generate_polygon_layouts(request)
+        del request["roomType"]  # sofa + TV should still be inferred as a living room
+        inferred = generate_polygon_layouts(request)
+        self.assertEqual("constructive-living-room", by_type["layouts"][0]["scoreKind"])
+        self.assertEqual(by_type["layouts"], inferred["layouts"])
+        self.assertEqual("", infer_room_type([{"id": "bed"}, {"id": "wardrobe"}]))
+
+    def test_every_layout_places_sofa_tv_and_coffee_and_revalidates(self):
+        result = generate_living_room_layouts(self._request())
+        self.assertTrue(result["layouts"])
+        self.assertLessEqual(len(result["layouts"]), 6)
+        doors_only = [o for o in self._request()["openings"] if o["kind"] == "door"]
+        for layout in result["layouts"]:
+            kinds = {p["catalogId"] for p in layout["placements"]}
+            self.assertEqual({"sofa", "tv-unit", "coffee-table"}, kinds)
+            verdict = validate_layout({**self._request(), "openings": doors_only, "placements": layout["placements"]})
+            self.assertTrue(verdict["valid"], verdict["violations"])
+
+    def test_sofa_takes_a_long_wall_and_tv_faces_it_off_the_window_wall(self):
+        layout = generate_living_room_layouts(self._request())["layouts"][0]
+        sofa = next(p for p in layout["placements"] if p["catalogId"] == "sofa")
+        tv = next(p for p in layout["placements"] if p["catalogId"] == "tv-unit")
+        # Sofa and TV sit on opposite 6 m walls (north/south), TV clear of the north window.
+        self.assertLess(_centroid(sofa)[1], 100)
+        self.assertGreater(_centroid(tv)[1], 300)
+        self.assertTrue(_semantic_verdict(self._request(), layout["placements"], 100.0)[0])
+
+    def test_nothing_sits_in_the_door_approach(self):
+        layout = generate_living_room_layouts(self._request())["layouts"][0]
+        keep_clear = _opening_keep_clear({"kind": "door", "span": [[0, 120], [0, 220]], "clearance": 0.9}, 100.0)
+        for placement in layout["placements"]:
+            ring = rectangle_ring(placement["x"], placement["y"], placement["width"], placement["depth"], placement["rotation"])
+            self.assertFalse(rings_overlap(ring, keep_clear), placement["catalogId"])
+
+    def test_coffee_table_sits_between_the_sofa_and_the_tv(self):
+        layout = generate_living_room_layouts(self._request())["layouts"][0]
+        sofa, tv, coffee = (next(p for p in layout["placements"] if p["catalogId"] == cid)
+                            for cid in ("sofa", "tv-unit", "coffee-table"))
+        (sx, sy), (tx, ty), (cx, cy) = _centroid(sofa), _centroid(tv), _centroid(coffee)
+        length = math.hypot(tx - sx, ty - sy)
+        offline = abs((tx - sx) * (sy - cy) - (sx - cx) * (ty - sy)) / length / 100.0
+        progress = ((cx - sx) * (tx - sx) + (cy - sy) * (ty - sy)) / (length * length)
+        self.assertLess(offline, 0.6)          # within 0.6 m of the sofa/TV centre line
+        self.assertTrue(0.15 < progress < 0.85)
+
+    def test_generation_is_deterministic_for_a_seed(self):
+        self.assertEqual(generate_living_room_layouts(self._request())["layouts"],
+                         generate_living_room_layouts(self._request())["layouts"])
+
+    def test_regeneration_excludes_the_six_currently_displayed_layouts(self):
+        first=generate_living_room_layouts(self._request(seed=5))["layouts"]
+        second=generate_living_room_layouts(self._request(seed=6,excludeLayouts=first))["layouts"]
+        def signatures(layouts):
+            return {tuple(sorted((p["catalogId"],round(p["x"],1),round(p["y"],1),round(p["rotation"]))
+                                 for p in layout["placements"])) for layout in layouts}
+        self.assertEqual(6,len(first));self.assertEqual(6,len(second))
+        self.assertFalse(signatures(first)&signatures(second))
+
+    def test_windows_on_both_long_walls_still_produce_a_valid_layout(self):
+        request = self._request(openings=[
+            {"id": "door-1", "kind": "door", "span": [[0, 120], [0, 220]], "clearance": 0.9},
+            {"id": "win-n", "kind": "window", "span": [[200, 0], [400, 0]], "clearance": 0.35},
+            {"id": "win-s", "kind": "window", "span": [[200, 400], [400, 400]], "clearance": 0.35},
+        ])
+        result = generate_living_room_layouts(request)
+        self.assertTrue(result["layouts"])
+        top = result["layouts"][0]
+        self.assertEqual({"sofa", "tv-unit", "coffee-table"}, {p["catalogId"] for p in top["placements"]})
+        doors_only = [o for o in request["openings"] if o["kind"] == "door"]
+        self.assertTrue(validate_layout({**request, "openings": doors_only, "placements": top["placements"]})["valid"])
+        # The TV never sits on a windowed wall: it stays clear of both y=0 and y=400.
+        tv = next(p for p in top["placements"] if p["catalogId"] == "tv-unit")
+        self.assertGreater(_centroid(tv)[1], 30)
+        self.assertLess(_centroid(tv)[1], 370)
+
+    def test_two_piece_request_without_a_coffee_table_is_accepted(self):
+        request = self._request(furniture=[
+            {"id": "sofa", "width": 2.2, "depth": 0.9, "required": True},
+            {"id": "tv-unit", "width": 1.6, "depth": 0.4, "required": True},
+        ])
+        top = generate_living_room_layouts(request)["layouts"][0]
+        self.assertEqual({"sofa", "tv-unit"}, {p["catalogId"] for p in top["placements"]})
+
+    def test_impossible_room_reports_an_actionable_reason(self):
+        tiny = self._request(polygon={"outer": [[0, 0], [180, 0], [180, 160], [0, 160]], "holes": []})
+        result = generate_living_room_layouts(tiny)
+        self.assertEqual([], result["layouts"])
+        self.assertEqual("no-feasible-layout", result["reasons"][0]["code"])
+        self.assertTrue(result["reasons"][0]["suggestions"])
+
+    def test_broken_preferences_penalise_the_score_instead_of_blocking(self):
+        # A window on every wall: the "TV off a window wall" rule cannot hold.
+        walled = self._request(openings=[
+            {"id": "door-1", "kind": "door", "span": [[0, 120], [0, 220]], "clearance": 0.9},
+            {"id": "w-n", "kind": "window", "span": [[200, 0], [400, 0]]},
+            {"id": "w-s", "kind": "window", "span": [[200, 400], [400, 400]]},
+            {"id": "w-e", "kind": "window", "span": [[600, 120], [600, 280]]},
+            {"id": "w-w", "kind": "window", "span": [[0, 280], [0, 360]]},
+        ])
+        result = generate_living_room_layouts(walled)
+        self.assertTrue(result["layouts"])            # still produces layouts
+        top = result["layouts"][0]
+        self.assertIn("tv_window_wall", top["penalties"])
+        self.assertEqual("review", top["validity"])
+        self.assertLess(top["score"], sum(top["scoreComponents"].values()))
+
 
 class ExtractionTests(unittest.TestCase):
     def test_wall_offset_beyond_tolerance_is_preserved(self):
