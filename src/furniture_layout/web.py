@@ -56,6 +56,7 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/projects/"):return self._json(200,STORE.load(path.rsplit("/",1)[-1]))
             if path in ("/","/index.html"):return self._send(200,(WEB_ROOT/"layouts-only.html").read_bytes(),"text/html; charset=utf-8")
             if path=="/layouts-only.html":return self._send(200,(WEB_ROOT/"layouts-only.html").read_bytes(),"text/html; charset=utf-8")
+            if path=="/room-visualizer.js":return self._send(200,(WEB_ROOT/"room-visualizer.js").read_bytes(),"text/javascript; charset=utf-8")
             self._json(404,{"error":"Not found"})
         except (ValueError,ProjectValidationError) as error:self._json(400,{"error":str(error)})
     def do_POST(self)->None:
