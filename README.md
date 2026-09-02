@@ -1,6 +1,16 @@
-# Sparkshift Furniture Layout Generation Module
+# FloorPlanAI 2D Room and Furniture Workspace
 
-A dependency-free Python engine that generates multiple rule-based furniture arrangements for a detected rectangular room, scores them, and identifies the recommended layout.
+This repository now includes a dependency-free 2D review workspace and deterministic polygon-aware furniture layout engine. The original rectangular integration remains backward compatible.
+
+## Implemented workflow
+
+Open a floor-plan image, import or draw reviewed room geometry, confirm real scale with two points, select a stable room ID, configure furniture, generate distinct layouts, apply and edit a placement, validate, then save or export JSON/PNG. The SVG view uses original, orientation-corrected image coordinates; pointer input is transformed through the inverse SVG view matrix.
+
+Bedroom and Living Room include illustrative catalog presets. Other types use editable custom furniture. Dimensions and clearances are prototype preferences, not building-code claims. Geometry or scale revisions mark dependent layouts stale.
+
+The canonical project JSON stores image dimensions and preprocessing transforms, polygon outer rings and holes, walls, shared openings, zones, fixed obstacles, metric furniture data, rotations/front directions, validation results, score components, seed, and input revision for later 3D consumers.
+
+Room polygons, opening spans, and obstacles are stored in original-image pixels. Furniture catalogue dimensions, `grid`, and opening `clearance` are supplied in metres. A confirmed `metersPerPixel` scale joins those coordinate systems. Generated placements retain `x`, `y`, `width`, and `depth` for drawing over the source image and also include `positionMeters`, `widthMeters`, `depthMeters`, `heightMeters`, and `rotation` for the later 3D stage. See `examples/polygon_layout_request.json` for the generation contract.
 
 ## What it covers
 
@@ -14,12 +24,24 @@ A dependency-free Python engine that generates multiple rule-based furniture arr
 
 Coordinates use metres. `(0, 0)` is the room's south-west corner. Opening `offset` is measured from the west end of a north/south wall, or the south end of an east/west wall.
 
-## Run
+## Windows / VS Code setup
 
 ```powershell
 python -m pip install -e .
-sparkshift-layout examples/living_room.json -o generated-layouts.json
+python -m furniture_layout.web
 ```
+
+Open `http://127.0.0.1:8090`.
+
+No external package is required for the 2D workspace. Detection is optional. To inspect a trusted YOLO checkpoint, install Ultralytics and configure a server-side path (the browser cannot choose model paths):
+
+```powershell
+python -m pip install ultralytics
+$env:FLOORPLAN_MODEL_PATH = "C:\path\to\trusted\best.pt"
+python -m furniture_layout.web
+```
+
+The service reads `model.names` after loading. A corrupt or incompatible checkpoint produces an explicit error; no fallback model or fabricated detection result is used. Detection boxes remain evidence only: Room boxes never become polygons or artificial walls.
 
 Without installing the package:
 
@@ -39,16 +61,11 @@ python -m furniture_layout.demo
 
 Open `output/layout-test-report.html` in a browser to compare the six generated layouts, inspect furniture placement, and review every score component.
 
-## Interactive sample web interface
+## API actions
 
-Run the dependency-free local test server:
+Project/import/calibration/generation/validation/save/export actions are available under `/api`. Review helpers preserve bounded wall offsets, ambiguous openings, shared doorway room IDs, and separate sealed extraction versus traversable navigation policies. Server JSON files are stored under `output/projects`.
 
-```powershell
-$env:PYTHONPATH = "src"
-python -m furniture_layout.web
-```
-
-Then open `http://127.0.0.1:8090`. The interface calls the real optimizer, supports room-type selection, regeneration with a new seed, layout selection, visual placement previews, and score comparison.
+Post the polygon request to `POST /api/layouts/generate`. The algorithm samples deterministic grid candidates, rejects footprints outside concave polygons or inside holes, rejects collisions with furniture/fixed obstacles/opening keep-clear regions, checks portal circulation, removes duplicate layouts, scores feasible alternatives, and returns the best options in descending score order.
 
 If Node.js/npm is installed, the same server can be started with:
 
@@ -64,6 +81,21 @@ Run the automated module tests with `npm test`.
 $env:PYTHONPATH = "src"
 python -m unittest discover -s tests -v
 ```
+
+or `npm test`.
+
+## Required reference inputs
+
+The requested real inputs are not currently in this repository. Place them without renaming at:
+
+- `examples/legacy/room_0_layouts.json`
+- `examples/legacy/room_3_layouts.json`
+- `examples/reference/original-floor-plan.<png|jpg>`
+- `examples/reference/detector-output.json` (and an optional rendered screenshot)
+- `examples/reference/snapped-wall.png`
+- Configure the trusted checkpoint with `FLOORPLAN_MODEL_PATH`; do not commit it unless your project policy explicitly permits large model files.
+
+Until an original image plus registration/preprocessing transforms and reviewed polygons are supplied, legacy coordinates are shown only as unregistered candidates and cannot be marked validated. Reported legacy areas are preserved but are not treated as verified measurements.
 
 ## Backend integration
 
