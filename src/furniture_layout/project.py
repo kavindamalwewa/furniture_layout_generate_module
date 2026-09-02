@@ -168,9 +168,22 @@ def legacy_layouts_to_project(data: dict[str, Any], source_name: str = "legacy.j
         x1, y1, x2, y2 = (_number(raw.get(k), f"{kind}s[{index}].{k}") for k in ("x1", "y1", "x2", "y2"))
         span = ([[x1, (y1 + y2) / 2], [x2, (y1 + y2) / 2]] if x2 - x1 >= y2 - y1
                 else [[(x1 + x2) / 2, y1], [(x1 + x2) / 2, y2]])
+        clearance = .9 if kind == "door" else .35
+        keep_clear = None
+        if kind == "door":
+            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+            door_width = max(x2 - x1, y2 - y1)
+            half_span = door_width / 2 + .15 / scale
+            depth = clearance / scale
+            nearest = min(((abs(cx-x), "left"), (abs(cx-(x+width)), "right"),
+                           (abs(cy-y), "top"), (abs(cy-(y+height)), "bottom")))[1]
+            if nearest == "left": keep_clear = [[x, cy-half_span], [x+depth, cy-half_span], [x+depth, cy+half_span], [x, cy+half_span]]
+            elif nearest == "right": keep_clear = [[x-depth+width, cy-half_span], [x+width, cy-half_span], [x+width, cy+half_span], [x-depth+width, cy+half_span]]
+            elif nearest == "top": keep_clear = [[cx-half_span, y], [cx+half_span, y], [cx+half_span, y+depth], [cx-half_span, y+depth]]
+            else: keep_clear = [[cx-half_span, y+height-depth], [cx+half_span, y+height-depth], [cx+half_span, y+height], [cx-half_span, y+height]]
         return {"id": f"{kind}-{index + 1}", "kind": kind, "span": span,
                 "adjacentRoomIds": [room_id], "reviewStatus": "model-derived",
-                "clearance": .9 if kind == "door" else .35}
+                "clearance": clearance, "keepClearPolygon": keep_clear}
 
     openings = [opening(value, "door", i) for i, value in enumerate(data.get("doors", []))]
     openings += [opening(value, "window", i) for i, value in enumerate(data.get("windows", []))]

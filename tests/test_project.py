@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from furniture_layout.polygon_engine import footprint_inside, generate_polygon_layouts, rectangle_ring, validate_layout
+from furniture_layout.polygon_engine import _semantic_verdict, footprint_inside, generate_polygon_layouts, rectangle_ring, validate_layout
 from furniture_layout.project import ProjectStore, ProjectValidationError, calibrate_scale, import_legacy, legacy_layouts_to_project, new_project
 from furniture_layout.extraction import associate_openings, bounded_snap_segments, extraction_contract
 
@@ -84,6 +84,16 @@ class PolygonTests(unittest.TestCase):
     def test_missing_polygon_and_unconfirmed_scale_stop_generation(self):
         with self.assertRaisesRegex(ProjectValidationError,"confirmed two-point scale"):generate_polygon_layouts({"scale":{"confirmed":False}})
         with self.assertRaisesRegex(ProjectValidationError,"reviewed room polygon"):generate_polygon_layouts({"scale":{"confirmed":True}})
+
+    def test_living_room_tv_faces_sofa_and_uses_window_free_wall(self):
+        polygon={"outer":[[0,0],[6,0],[6,5],[0,5]],"holes":[]}
+        placements=[{"catalogId":"sofa","x":2,"y":1,"width":2,"depth":.8,"rotation":0},
+                    {"catalogId":"tv-unit","x":2.5,"y":4.6,"width":1,"depth":.3,"rotation":0}]
+        valid={"polygon":polygon,"openings":[{"kind":"window","span":[[0,0],[2,0]]}]}
+        self.assertTrue(_semantic_verdict(valid,placements,1)[0])
+        invalid={"polygon":polygon,"openings":[{"kind":"window","span":[[2,5],[4,5]]}]}
+        verdict=_semantic_verdict(invalid,placements,1)
+        self.assertFalse(verdict[0]);self.assertTrue(any("window" in reason for reason in verdict[1]))
 
 class ExtractionTests(unittest.TestCase):
     def test_wall_offset_beyond_tolerance_is_preserved(self):

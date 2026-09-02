@@ -75,6 +75,67 @@ def _footprint(placement: dict[str, Any]) -> list[list[float]]:
         float(placement["width"]), float(placement.get("depth", placement.get("length"))), float(placement.get("rotation", 0)))
 
 
+def _point_segment_distance(point: tuple[float, float], a: list[float], b: list[float]) -> float:
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    denominator = dx * dx + dy * dy
+    t = 0.0 if denominator <= EPS else max(0.0, min(1.0, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / denominator))
+    return math.hypot(point[0] - (a[0] + t * dx), point[1] - (a[1] + t * dy))
+
+
+def _centre(placement: dict[str, Any]) -> tuple[float, float]:
+    ring = _footprint(placement)
+    return sum(p[0] for p in ring) / len(ring), sum(p[1] for p in ring) / len(ring)
+
+
+def _nearest_wall(point: tuple[float, float], polygon: dict[str, Any]) -> tuple[int, float]:
+    walls = list(zip(polygon["outer"], polygon["outer"][1:] + polygon["outer"][:1]))
+    distances = [_point_segment_distance(point, a, b) for a, b in walls]
+    index = min(range(len(distances)), key=distances.__getitem__)
+    return index, distances[index]
+
+
+def _semantic_verdict(request: dict[str, Any], placements: list[dict[str, Any]], units_per_meter: float) -> tuple[bool, list[str], float]:
+    """Hard real-world living-room rules plus a functional score."""
+    polygon = request["polygon"]
+    by_kind = {"tv": [], "sofa": []}
+    for placement in placements:
+        item_id = str(placement.get("catalogId", "")).lower().replace("_", "-")
+        if "tv" in item_id: by_kind["tv"].append(placement)
+        if "sofa" in item_id or "couch" in item_id: by_kind["sofa"].append(placement)
+    reasons: list[str] = []
+    functional_score = 20.0
+
+    window_walls = set()
+    for opening in request.get("openings", []):
+        if opening.get("kind") == "window" and opening.get("span"):
+            midpoint = ((opening["span"][0][0] + opening["span"][1][0]) / 2,
+                        (opening["span"][0][1] + opening["span"][1][1]) / 2)
+            window_walls.add(_nearest_wall(midpoint, polygon)[0])
+
+    for tv in by_kind["tv"]:
+        wall_index, wall_gap = _nearest_wall(_centre(tv), polygon)
+        allowed_gap = max(float(tv["width"]), float(tv["depth"])) / 2 + .3 * units_per_meter
+        if wall_gap > allowed_gap:
+            reasons.append("TV unit must be placed against a wall")
+        if wall_index in window_walls:
+            reasons.append("TV unit supporting wall must not contain a window")
+
+    if by_kind["tv"] and by_kind["sofa"]:
+        tv, sofa = by_kind["tv"][0], by_kind["sofa"][0]
+        tx, ty = _centre(tv); sx, sy = _centre(sofa)
+        distance = math.hypot(tx - sx, ty - sy) / units_per_meter
+        if not 1.4 <= distance <= 4.5:
+            reasons.append("Sofa and TV viewing distance must be between 1.4 m and 4.5 m")
+        angle = math.radians(float(sofa.get("rotation", 0)))
+        front = (-math.sin(angle), math.cos(angle))
+        length = max(math.hypot(tx - sx, ty - sy), EPS)
+        alignment = abs(((tx - sx) * front[0] + (ty - sy) * front[1]) / length)
+        if alignment < .7:
+            reasons.append("TV unit must be in front of the sofa")
+        functional_score = max(0.0, 20.0 * alignment * (1.0 - min(abs(distance - 2.7) / 3.0, 1.0)))
+    return not reasons, reasons, round(functional_score, 2)
+
+
 def _opening_keep_clear(opening: dict[str, Any], units_per_meter: float = 1.0) -> list[list[float]] | None:
     if opening.get("keepClearPolygon"):
         return opening["keepClearPolygon"]
@@ -179,10 +240,12 @@ def generate_polygon_layouts(request: dict[str, Any]) -> dict[str, Any]:
         if len(placements) < sum(1 for s,_ in specs if s.get("required",True)): continue
         verdict=validate_layout({**request,"placements":placements})
         if not verdict["valid"]: continue
+        semantic_valid, semantic_reasons, functional_score = _semantic_verdict(request, placements, units_per_meter)
+        if not semantic_valid: continue
         signature=tuple(sorted((p['catalogId'],round(p['x']/grid),round(p['y']/grid),round(p['rotation'])%360,round(p['width'],2),round(p['depth'],2)) for p in placements))
         if any(c[0]==signature for c in candidates): continue
         used=sum(p['width']*p['depth'] for p in placements); room_area=abs(signed_area(polygon['outer']))-sum(abs(signed_area(h)) for h in polygon.get('holes',[])); density=used/max(room_area,EPS)
-        components={"completeness":40.0,"free_space":round(max(0,30*(1-density)),2),"distribution":round(20/(1+abs(density-.3)*5),2),"opening_access":10.0}
+        components={"completeness":30.0,"free_space":round(max(0,25*(1-density)),2),"distribution":round(15/(1+abs(density-.3)*5),2),"opening_access":10.0,"functional_relationships":functional_score}
         candidates.append((signature,{"id":f"layout-{len(candidates)+1}","roomId":request.get("roomId"),"placements":placements,"validity":"valid","violations":[],"assumptions":verdict['assumptions'],"score":round(sum(components.values()),2),"scoreComponents":components,"scoreKind":"heuristic","seed":seed,"inputRevision":revision}))
         if len(candidates)>=count: break
     layouts=[c[1] for c in sorted(candidates,key=lambda c:c[1]['score'],reverse=True)]
