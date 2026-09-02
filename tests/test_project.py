@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from furniture_layout.polygon_engine import _semantic_verdict, footprint_inside, generate_polygon_layouts, rectangle_ring, validate_layout
+from furniture_layout.polygon_engine import _layout_score_components, _semantic_verdict, footprint_inside, generate_polygon_layouts, rectangle_ring, validate_layout
 from furniture_layout.project import ProjectStore, ProjectValidationError, calibrate_scale, import_legacy, legacy_layouts_to_project, new_project
 from furniture_layout.extraction import associate_openings, bounded_snap_segments, extraction_contract
 
@@ -94,6 +94,17 @@ class PolygonTests(unittest.TestCase):
         invalid={"polygon":polygon,"openings":[{"kind":"window","span":[[2,5],[4,5]]}]}
         verdict=_semantic_verdict(invalid,placements,1)
         self.assertFalse(verdict[0]);self.assertTrue(any("window" in reason for reason in verdict[1]))
+
+    def test_modern_arrangement_scores_above_central_sofa_and_wall_table(self):
+        request={"polygon":{"outer":[[0,0],[6,0],[6,5],[0,5]],"holes":[]},"openings":[]}
+        good=[{"catalogId":"sofa","x":2,"y":.1,"width":2,"depth":.8,"rotation":0},
+              {"catalogId":"tv-unit","x":2.5,"y":4.6,"width":1,"depth":.3,"rotation":0},
+              {"catalogId":"coffee-table","x":2.5,"y":2.3,"width":1,"depth":.5,"rotation":0}]
+        bad=[{"catalogId":"sofa","x":2,"y":2,"width":2,"depth":.8,"rotation":0},good[1],
+             {"catalogId":"coffee-table","x":.1,"y":2.3,"width":1,"depth":.5,"rotation":0}]
+        good_score=sum(_layout_score_components(request,good,1,20).values())
+        bad_score=sum(_layout_score_components(request,bad,1,20).values())
+        self.assertGreater(good_score,bad_score+20)
 
 class ExtractionTests(unittest.TestCase):
     def test_wall_offset_beyond_tolerance_is_preserved(self):
