@@ -207,7 +207,7 @@ def generate_polygon_layouts(request: dict[str, Any]) -> dict[str, Any]:
     meters_per_unit=float(request.get("scale",{}).get("metersPerPixel",1.0))
     if meters_per_unit <= 0: raise ProjectValidationError("scale.metersPerPixel must be positive")
     units_per_meter=1.0/meters_per_unit
-    count=min(5,max(1,int(request.get("count",5)))); grid=max(.1,float(request.get("grid",.25)))*units_per_meter; rng=random.Random(seed); box=polygon_bbox(polygon)
+    count=min(6,max(1,int(request.get("count",6)))); grid=max(.1,float(request.get("grid",.25)))*units_per_meter; rng=random.Random(seed); box=polygon_bbox(polygon)
     specs=[]
     for spec in request.get("furniture",[]):
         quantity=int(spec.get("quantity",1))
