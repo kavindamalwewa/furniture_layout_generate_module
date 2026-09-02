@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 
 from .optimizer import NoValidLayoutError
+from .polygon_engine import generate_polygon_layouts
+from .project import ProjectValidationError
 from .service import generate_layouts
 
 
@@ -16,8 +18,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         payload = json.loads(args.input.read_text(encoding="utf-8"))
-        result = generate_layouts(payload)
-    except (KeyError, TypeError, ValueError, NoValidLayoutError, json.JSONDecodeError) as error:
+        result = generate_polygon_layouts(payload) if "polygon" in payload else generate_layouts(payload)
+    except (KeyError, TypeError, ValueError, NoValidLayoutError, ProjectValidationError, json.JSONDecodeError) as error:
         print(json.dumps({"error": str(error)}), file=sys.stderr)
         return 2
     output = json.dumps(result, indent=2)
@@ -30,4 +32,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

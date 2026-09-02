@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from .optimizer import NoValidLayoutError
 from .polygon_engine import generate_polygon_layouts, validate_layout
 from .extraction import associate_openings, bounded_snap_segments, extraction_contract
-from .project import ProjectStore, ProjectValidationError, calibrate_scale, import_legacy, new_project, validate_project
+from .project import ProjectStore, ProjectValidationError, calibrate_scale, import_legacy, legacy_layouts_to_project, new_project, validate_project
 from .service import generate_layouts
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -54,7 +54,8 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path=="/api/presets":return self._send(200,PRESETS_FILE.read_bytes(),"application/json")
             if path=="/api/model":return self._json(200,inspect_model())
             if path.startswith("/api/projects/"):return self._json(200,STORE.load(path.rsplit("/",1)[-1]))
-            if path in ("/","/index.html"):return self._send(200,(WEB_ROOT/"index.html").read_bytes(),"text/html; charset=utf-8")
+            if path in ("/","/index.html"):return self._send(200,(WEB_ROOT/"layouts-only.html").read_bytes(),"text/html; charset=utf-8")
+            if path=="/layouts-only.html":return self._send(200,(WEB_ROOT/"layouts-only.html").read_bytes(),"text/html; charset=utf-8")
             self._json(404,{"error":"Not found"})
         except (ValueError,ProjectValidationError) as error:self._json(400,{"error":str(error)})
     def do_POST(self)->None:
@@ -64,6 +65,7 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path=="/api/layouts":result=generate_layouts(data)
             elif path=="/api/projects/new":result=new_project(data.get("image"))
             elif path=="/api/import/legacy":result=import_legacy(data.get("data",data),data.get("sourceName","legacy.json"))
+            elif path=="/api/import/layout-project":result=legacy_layouts_to_project(data.get("data",data),data.get("sourceName","legacy.json"))
             elif path=="/api/calibrate":result=calibrate_scale(data["pointA"],data["pointB"],data["knownLength"],data["unit"])
             elif path=="/api/layouts/generate":result=generate_polygon_layouts(data)
             elif path=="/api/layouts/validate":result=validate_layout(data)

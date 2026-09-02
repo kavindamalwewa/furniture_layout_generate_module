@@ -156,6 +156,57 @@ def import_legacy(data: dict[str, Any], source_name: str = "legacy.json") -> dic
             "layouts": candidates, "warnings": warnings}
 
 
+def legacy_layouts_to_project(data: dict[str, Any], source_name: str = "legacy.json") -> dict[str, Any]:
+    """Turn a bbox-based model result into a directly usable project."""
+    imported = import_legacy(data, source_name)
+    box = imported["room"]["legacyBboxPx"]
+    x, y, width, height = box["x"], box["y"], box["width"], box["height"]
+    room_id, scale = imported["room"]["id"], imported["scale"]["metersPerPixel"]
+    polygon = {"outer": [[x, y], [x + width, y], [x + width, y + height], [x, y + height]], "holes": []}
+
+    def opening(raw: dict[str, Any], kind: str, index: int) -> dict[str, Any]:
+        x1, y1, x2, y2 = (_number(raw.get(k), f"{kind}s[{index}].{k}") for k in ("x1", "y1", "x2", "y2"))
+        span = ([[x1, (y1 + y2) / 2], [x2, (y1 + y2) / 2]] if x2 - x1 >= y2 - y1
+                else [[(x1 + x2) / 2, y1], [(x1 + x2) / 2, y2]])
+        return {"id": f"{kind}-{index + 1}", "kind": kind, "span": span,
+                "adjacentRoomIds": [room_id], "reviewStatus": "model-derived",
+                "clearance": .9 if kind == "door" else .35}
+
+    openings = [opening(value, "door", i) for i, value in enumerate(data.get("doors", []))]
+    openings += [opening(value, "window", i) for i, value in enumerate(data.get("windows", []))]
+    layouts = []
+    for candidate in imported["layouts"]:
+        placements = []
+        for placement in candidate["placements"]:
+            image_box = placement["imageBox"]
+            placements.append({"id": placement["id"], "catalogId": placement["catalogId"],
+                "x": image_box["x1"], "y": image_box["y1"],
+                "width": image_box["x2"] - image_box["x1"], "depth": image_box["y2"] - image_box["y1"],
+                "widthMeters": placement["widthMeters"], "depthMeters": placement["depthMeters"],
+                "heightMeters": None, "rotation": 0, "frontDirection": None,
+                "positionMeters": {"x": (image_box["x1"] - x) * scale, "y": (image_box["y1"] - y) * scale},
+                "required": True, "locked": False})
+        layouts.append({"id": candidate["id"], "roomId": room_id, "placements": placements,
+                        "validity": "model-derived", "violations": [], "assumptions": candidate["assumptions"],
+                        "score": candidate["score"] or 0, "scoreComponents": {}, "scoreKind": "legacy-unverified",
+                        "seed": None, "inputRevision": 0})
+
+    first = layouts[0]["placements"] if layouts else []
+    furniture = [[p["catalogId"], p["catalogId"].replace("-", " ").title(), 1,
+                  round(p["widthMeters"], 3), round(p["depthMeters"], 3), True] for p in first]
+    project = new_project()
+    project.update({"scale": {"metersPerPixel": scale, "source": data.get("scale_source", "model-json"),
+                              "confirmed": True, "acceptedFromInputJson": True, "revision": 1},
+                    "geometryRevision": 1, "openings": openings, "layouts": layouts,
+                    "selectedRoomId": room_id, "selectedLayoutId": layouts[0]["id"] if layouts else None,
+                    "warnings": ["Room boundary uses the bbox supplied by the input JSON."]})
+    project["rooms"] = [{"id": room_id, "name": imported["room"]["name"],
+                         "type": str(imported["room"]["type"]).lower(), "polygon": polygon,
+                         "source": "input-json-bbox", "reviewStatus": "model-derived",
+                         "computedAreaM2": polygon_area(polygon) * scale * scale, "furniture": furniture}]
+    return project
+
+
 @dataclass(slots=True)
 class ProjectStore:
     root: Path

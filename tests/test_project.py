@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from furniture_layout.polygon_engine import footprint_inside, generate_polygon_layouts, rectangle_ring, validate_layout
-from furniture_layout.project import ProjectStore, ProjectValidationError, calibrate_scale, import_legacy, new_project
+from furniture_layout.project import ProjectStore, ProjectValidationError, calibrate_scale, import_legacy, legacy_layouts_to_project, new_project
 from furniture_layout.extraction import associate_openings, bounded_snap_segments, extraction_contract
 
 
@@ -33,6 +33,14 @@ class ProjectTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store=ProjectStore(Path(tmp));project=new_project();store.save(project)
             self.assertEqual(project,store.load(project["id"]))
+
+    def test_legacy_layout_file_opens_without_drawing_a_room(self):
+        source=legacy_fixture();project=legacy_layouts_to_project(source,"room_0_layouts.json")
+        self.assertEqual("room-3",project["selectedRoomId"])
+        self.assertTrue(project["scale"]["confirmed"])
+        self.assertEqual(4,len(project["rooms"][0]["polygon"]["outer"]))
+        self.assertGreater(len(project["layouts"]),0)
+        self.assertIn("x",project["layouts"][0]["placements"][0])
 
 
 class PolygonTests(unittest.TestCase):

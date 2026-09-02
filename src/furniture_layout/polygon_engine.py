@@ -167,9 +167,11 @@ def generate_polygon_layouts(request: dict[str, Any]) -> dict[str, Any]:
         placements=[]
         for (spec,instance),pool in zip(specs,pools):
             chosen=None
-            for x,y,rotation in pool[:min(len(pool),200)]:
+            offset=rng.randrange(len(pool)) if pool else 0
+            trial_pool=(pool[offset:]+pool[:offset])[:min(len(pool),200)]
+            for x,y,rotation in trial_pool:
                 width_m=float(spec['width']);depth_m=float(spec['depth']);width=width_m*units_per_meter;depth=depth_m*units_per_meter
-                explored+=1; placement={"id":f"{spec['id']}-{instance}","catalogId":spec['id'],"x":x,"y":y,"width":width,"depth":depth,"widthMeters":width_m,"depthMeters":depth_m,"heightMeters":spec.get("height"),"rotation":rotation,"frontDirection":rotation,"locked":bool(spec.get("locked",False)),"required":bool(spec.get("required",True)),"wallAttached":bool(spec.get("wallAttached",False)),"supportWallId":spec.get("supportWallId"),"supportKind":spec.get("supportKind"),"accessPoint":[x+width/2,y+depth+.25*units_per_meter],"positionMeters":{"x":(x-box['x'])*meters_per_unit,"y":(y-box['y'])*meters_per_unit}}
+                explored+=1; placement={"id":f"{spec['id']}-{instance}","catalogId":spec['id'],"x":x,"y":y,"width":width,"depth":depth,"widthMeters":width_m,"depthMeters":depth_m,"heightMeters":spec.get("height"),"rotation":rotation,"frontDirection":rotation,"locked":bool(spec.get("locked",False)),"required":bool(spec.get("required",True)),"wallAttached":bool(spec.get("wallAttached",False)),"supportWallId":spec.get("supportWallId"),"supportKind":spec.get("supportKind"),"accessPoint":spec.get("accessPoint"),"positionMeters":{"x":(x-box['x'])*meters_per_unit,"y":(y-box['y'])*meters_per_unit}}
                 verdict=validate_layout({**request,"placements":placements+[placement]})
                 if not any(v["code"] not in {"blocked-route"} for v in verdict["violations"]): chosen=placement;break
             if chosen: placements.append(chosen)
