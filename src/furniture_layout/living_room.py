@@ -143,9 +143,8 @@ def _wall_candidates(walls: list[dict[str, Any]], window_walls: set[int], door_w
                      sofa_len_px: float, tv_len_px: float) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """Every ``(sofa_wall, tv_wall)`` pairing, best first.
 
-    Each living-room rule here is a *preference* used for ordering, never a
-    filter, so the list is non-empty for any room with two or more walls and the
-    engine always has something to build.  Priority, most important first:
+    A wall containing a door is a hard exclusion for the sofa. Other living-room
+    rules are preferences used for ordering. Priority, most important first:
 
     1. the sofa wall is long enough for the sofa;
     2. the TV wall is long enough for the TV;
@@ -153,11 +152,12 @@ def _wall_candidates(walls: list[dict[str, Any]], window_walls: set[int], door_w
     4. the TV wall carries no window;
     5. the TV wall faces the sofa;
     6. the TV wall carries no door;
-    7. the sofa wall carries no door.
     """
     longest = max(wall["length"] for wall in walls)
     ranked: list[tuple[tuple, dict[str, Any], dict[str, Any]]] = []
     for sofa_wall in walls:
+        if sofa_wall["index"] in door_walls:
+            continue
         for tv_wall in walls:
             if tv_wall["index"] == sofa_wall["index"]:
                 continue
@@ -169,7 +169,6 @@ def _wall_candidates(walls: list[dict[str, Any]], window_walls: set[int], door_w
                 0 if tv_wall["index"] not in window_walls else 1,
                 0 if facing <= FACING_DOT else 1,
                 0 if tv_wall["index"] not in door_walls else 1,
-                0 if sofa_wall["index"] not in door_walls else 1,
                 round(facing, 4),
                 -round(sofa_wall["length"], 3),
             )
@@ -278,7 +277,7 @@ _TWEAKS = [
 # The rule still shapes the ranking; it just no longer blocks a result.
 _PENALTY = {
     "sofa_not_longest": 5.0,     # sofa could not take the longest wall
-    "tv_window_wall": 8.0,       # no window-free wall was available for the TV
+    "tv_window_wall": 20.0,      # strongly prefer a clear side wall over covering a window
     "tv_not_facing": 9.0,        # the TV wall does not face the sofa
     "near_door": 12.0,           # a piece sits in a door approach
     "coffee_missing": 6.0,       # no clear spot for the coffee table
@@ -349,6 +348,10 @@ def _build(request: dict[str, Any], sofa_wall: dict[str, Any], tv_wall: dict[str
     tv_ring = ring_of(tv_geom)
     if not inside(tv_ring):
         return None
+    # Door access is a hard safety constraint for the TV. A door wall remains
+    # usable only when the unit can sit completely outside its approach zone.
+    if hits_door(tv_ring):
+        return None
     facing = _facing(tv_wall, sofa_wall)
     if tv_wall["index"] in window_walls:
         penalties["tv_window_wall"] = _PENALTY["tv_window_wall"]
@@ -360,9 +363,6 @@ def _build(request: dict[str, Any], sofa_wall: dict[str, Any], tv_wall: dict[str
     if facing > FACING_DOT:
         penalties["tv_not_facing"] = _PENALTY["tv_not_facing"]
         assumptions.append("TV unit does not directly face the sofa (no facing wall was available)")
-    if hits_door(tv_ring):
-        penalties["near_door"] = _PENALTY["near_door"]
-
     placements = [_placement(sofa_spec, sofa_geom, sofa_along, sofa_into, box, meters_per_unit),
                   _placement(tv_spec, tv_geom, tv_along, tv_into, box, meters_per_unit)]
     if rings_overlap(sofa_ring, tv_ring):
@@ -406,6 +406,55 @@ def _layout_signature(placements: list[dict[str, Any]]) -> tuple:
                         for p in placements))
 
 
+def _diverse_layouts(layouts: list[dict[str, Any]], count: int) -> list[dict[str, Any]]:
+    """Keep the best layout first, then favour genuinely different wall rules.
+
+    Position-only variations of one arrangement used to occupy every result.
+    The greedy diversity bonus makes unseen sofa walls the strongest alternative,
+    followed by unseen TV walls, wall pairings, and facing/perpendicular relations.
+    Score remains the tie-breaker, so the best example of each rule wins.
+    """
+    remaining = sorted(
+        layouts,
+        key=lambda entry: (
+            "tv_window_wall" not in entry["penalties"],
+            "tv_not_facing" not in entry["penalties"],
+            "near_door" not in entry["penalties"],
+            entry["score"],
+        ),
+        reverse=True,
+    )
+    if not remaining:
+        return []
+    selected = [remaining.pop(0)]
+    sofa_walls = {selected[0]["_sofaWallIndex"]}
+    tv_walls = {selected[0]["_tvWallIndex"]}
+    pairs = {(selected[0]["_sofaWallIndex"], selected[0]["_tvWallIndex"])}
+    relations = {selected[0]["_tvRule"]}
+    while remaining and len(selected) < count:
+        def priority(entry: dict[str, Any]) -> tuple:
+            pair = (entry["_sofaWallIndex"], entry["_tvWallIndex"])
+            return (
+                entry["_sofaWallIndex"] not in sofa_walls,
+                entry["_tvWallIndex"] not in tv_walls,
+                pair not in pairs,
+                entry["_tvRule"] not in relations,
+                entry["score"],
+            )
+        chosen = max(remaining, key=priority)
+        remaining.remove(chosen)
+        selected.append(chosen)
+        sofa_walls.add(chosen["_sofaWallIndex"])
+        tv_walls.add(chosen["_tvWallIndex"])
+        pairs.add((chosen["_sofaWallIndex"], chosen["_tvWallIndex"]))
+        relations.add(chosen["_tvRule"])
+    for entry in selected:
+        entry.pop("_sofaWallIndex", None)
+        entry.pop("_tvWallIndex", None)
+        entry.pop("_tvRule", None)
+    return selected
+
+
 def generate_living_room_layouts(request: dict[str, Any]) -> dict[str, Any]:
     polygon = request.get("polygon")
     if not polygon:
@@ -443,6 +492,8 @@ def generate_living_room_layouts(request: dict[str, Any]) -> dict[str, Any]:
     sofa_len_px = max(float(sofa_spec["width"]), float(sofa_spec["depth"])) * units_per_meter
     tv_len_px = max(float(tv_spec["width"]), float(tv_spec["depth"])) * units_per_meter
     candidates = _wall_candidates(walls, window_walls, door_walls, sofa_len_px, tv_len_px)
+    if not candidates:
+        return _no_layouts(request, revision, "The sofa requires a wall without a door")
 
     full: list[dict[str, Any]] = []
     partial: list[dict[str, Any]] = []
@@ -450,7 +501,10 @@ def generate_living_room_layouts(request: dict[str, Any]) -> dict[str, Any]:
     excluded = {_layout_signature(entry.get("placements", [])) for entry in request.get("excludeLayouts", [])}
     explored = 0
 
-    for sofa_wall, tv_wall in candidates[:8]:
+    # Explore every wall pair. Keep only a bounded number of variants per pair;
+    # final selection below values different placement rules over tiny nudges.
+    for sofa_wall, tv_wall in candidates:
+        accepted_for_pair = 0
         for tweak in _seed_rotate(_TWEAKS, seed):
             explored += 1
             built = _build(request, sofa_wall, tv_wall, tweak, window_walls, door_walls,
@@ -476,12 +530,15 @@ def generate_living_room_layouts(request: dict[str, Any]) -> dict[str, Any]:
                 "score": round(max(0.0, sum(components.values()) - penalty), 2),
                 "scoreComponents": components, "penalties": built["penalties"],
                 "scoreKind": "constructive-living-room", "seed": seed, "inputRevision": revision,
+                "_sofaWallIndex": sofa_wall["index"], "_tvWallIndex": tv_wall["index"],
+                "_tvRule": "facing" if _facing(tv_wall, sofa_wall) <= FACING_DOT else "perpendicular",
             }
             (full if built["complete"] else partial).append(layout)
-        if len(full) >= count:
-            break
+            accepted_for_pair += 1
+            if accepted_for_pair >= max(8, count * 2):
+                break
 
-    layouts = sorted(full or partial, key=lambda entry: entry["score"], reverse=True)[:count]
+    layouts = _diverse_layouts(full or partial, count)
     for position, layout in enumerate(layouts, start=1):
         layout["id"] = f"layout-{position}"
     if layouts:

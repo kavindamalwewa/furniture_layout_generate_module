@@ -5,8 +5,8 @@ from pathlib import Path
 
 import math
 
-from furniture_layout.living_room import generate_living_room_layouts, infer_room_type
-from furniture_layout.polygon_engine import _layout_score_components, _opening_keep_clear, _semantic_verdict, footprint_inside, generate_polygon_layouts, rectangle_ring, rings_overlap, validate_layout
+from furniture_layout.living_room import _polygon_walls, generate_living_room_layouts, infer_room_type
+from furniture_layout.polygon_engine import _layout_score_components, _opening_keep_clear, _point_segment_distance, _semantic_verdict, footprint_inside, generate_polygon_layouts, rectangle_ring, rings_overlap, validate_layout
 from furniture_layout.project import ProjectStore, ProjectValidationError, calibrate_scale, import_legacy, legacy_layouts_to_project, new_project
 from furniture_layout.extraction import associate_openings, bounded_snap_segments, extraction_contract
 
@@ -197,6 +197,67 @@ class LivingRoomTests(unittest.TestCase):
     def test_generation_is_deterministic_for_a_seed(self):
         self.assertEqual(generate_living_room_layouts(self._request())["layouts"],
                          generate_living_room_layouts(self._request())["layouts"])
+
+    def test_results_use_different_sofa_and_tv_walls(self):
+        layouts = generate_living_room_layouts(self._request())["layouts"]
+        walls = _polygon_walls(self._request()["polygon"])
+
+        def nearest_wall(placement):
+            center = _centroid(placement)
+            return min(walls, key=lambda wall: _point_segment_distance(center, wall["a"], wall["b"]))["index"]
+
+        sofa_walls = set()
+        tv_walls = set()
+        wall_pairs = set()
+        for layout in layouts:
+            sofa = next(p for p in layout["placements"] if p["catalogId"] == "sofa")
+            tv = next(p for p in layout["placements"] if p["catalogId"] == "tv-unit")
+            sofa_wall, tv_wall = nearest_wall(sofa), nearest_wall(tv)
+            sofa_walls.add(sofa_wall)
+            tv_walls.add(tv_wall)
+            wall_pairs.add((sofa_wall, tv_wall))
+        self.assertGreaterEqual(len(sofa_walls), 3)
+        self.assertGreaterEqual(len(tv_walls), 3)
+        self.assertGreaterEqual(len(wall_pairs), 4)
+
+    def test_sofa_never_uses_a_wall_with_a_door(self):
+        request = self._request(openings=[
+            {"id": "door-west", "kind": "door", "span": [[0, 120], [0, 220]], "clearance": 0.9},
+            {"id": "door-north", "kind": "door", "span": [[250, 0], [350, 0]], "clearance": 0.9},
+        ])
+        walls = _polygon_walls(request["polygon"])
+        layouts = generate_living_room_layouts(request)["layouts"]
+        self.assertTrue(layouts)
+        for layout in layouts:
+            sofa = next(p for p in layout["placements"] if p["catalogId"] == "sofa")
+            center = _centroid(sofa)
+            wall = min(walls, key=lambda item: _point_segment_distance(center, item["a"], item["b"]))
+            self.assertNotIn(wall["index"], {0, 3})
+
+    def test_tv_unit_stays_outside_door_approach_zones(self):
+        request = self._request(openings=[
+            {"id": "door-west", "kind": "door", "span": [[0, 120], [0, 220]], "clearance": 1.2},
+            {"id": "door-east", "kind": "door", "span": [[600, 100], [600, 200]], "clearance": 1.2},
+        ])
+        layouts = generate_living_room_layouts(request)["layouts"]
+        self.assertTrue(layouts)
+        door_zones = [_opening_keep_clear(opening, 100.0) for opening in request["openings"]]
+        for layout in layouts:
+            tv = next(p for p in layout["placements"] if p["catalogId"] == "tv-unit")
+            tv_ring = rectangle_ring(tv["x"], tv["y"], tv["width"], tv["depth"], tv["rotation"])
+            self.assertFalse(any(rings_overlap(tv_ring, zone) for zone in door_zones))
+
+    def test_no_non_door_sofa_wall_returns_a_reason(self):
+        request = self._request(openings=[
+            {"id": f"door-{index}", "kind": "door", "span": span}
+            for index, span in enumerate((
+                [[200, 0], [300, 0]], [[600, 100], [600, 200]],
+                [[200, 400], [300, 400]], [[0, 100], [0, 200]],
+            ))
+        ])
+        result = generate_living_room_layouts(request)
+        self.assertEqual([], result["layouts"])
+        self.assertIn("wall without a door", result["reasons"][0]["message"])
 
     def test_regeneration_excludes_the_six_currently_displayed_layouts(self):
         first=generate_living_room_layouts(self._request(seed=5))["layouts"]
