@@ -63,7 +63,7 @@ Open `output/layout-test-report.html` in a browser to compare the six generated 
 
 ## Room-type layout engines
 
-A single sampler cannot satisfy bedroom, living room, kitchen, and bathroom rules at once, so `POST /api/layouts/generate` first decides the room type, then dispatches to the engine that matches it. The type comes from the request `roomType` field; if it is absent, a request that asks for both a sofa and a TV is treated as a living room. Anything without a dedicated engine falls back to the generic deterministic grid sampler.
+A single sampler cannot satisfy bedroom, living room, kitchen, and bathroom rules at once, so `POST /api/layouts/generate` first decides the room type, then dispatches to the engine that matches it. The type comes from the request `roomType` field; if it is absent, a request that asks for both a sofa and a TV is treated as a living room, and one that asks for a bed as a bedroom. Anything without a dedicated engine (including a bedroom request with no bed) falls back to the generic deterministic grid sampler.
 
 **Living room** (`furniture_layout.living_room`) constructs the layout in a fixed order instead of sampling it. Every living-room rule is a **preference that shapes the ranking and the score, never a filter that blocks a result** — so the engine returns layouts whenever the sofa and TV physically fit:
 
@@ -73,11 +73,34 @@ A single sampler cannot satisfy bedroom, living room, kitchen, and bathroom rule
 
 Each unmet preference (`sofa_not_longest`, `tv_window_wall`, `tv_not_facing`, `near_door`, `coffee_missing`) subtracts points and is listed under `penalties`; the layout's `validity` is `"review"` when any penalty applied. Every `(sofa wall, TV wall)` pairing is explored. The best rule-compliant result stays first, while the remaining results favour unused sofa walls, TV walls, wall pairings, and facing/perpendicular TV rules instead of returning six small nudges of one arrangement. Results are validated and scored with the shared helpers, so the response contract matches the generic engine (`scoreKind` is `constructive-living-room`); the only arrangement never shipped is furniture overlapping furniture. Layouts with all three pieces are preferred over sofa+TV-only ones. Only the sofa, TV, and coffee table are arranged; other requested items are reported under `assumptions`. `no-feasible-layout` is returned only when the room is genuinely smaller than the sofa or TV at the confirmed scale.
 
+**Bedroom** (`furniture_layout.bedroom`) also constructs its layouts rather than sampling them, following modern bedroom planning. Every piece stands flush against a wall, so the middle of the room stays open:
+
+1. The bed's headboard goes against a wall as close to a window as the room allows: centred under it, beside it, or with the bed tucked into the corner and running alongside the window wall. A headboard that only partly covers a window scores below one centred on it. The bed never enters a door approach.
+2. Nightstands flank the head of the bed on the same wall (a bed tucked into a corner keeps one).
+3. The wardrobe and other tall storage stand against a wall, off the windows, with 0.6 m clear in front to open the doors.
+4. The study table goes against a different wall from the bed, as close to daylight as possible, with 0.6 m in front; a chair is pulled up to it. Dressers and other items also go against a wall.
+
+Bedrooms are scored by their own code in `furniture_layout.bedroom`; the living room keeps its scorer in `polygon_engine._layout_score_components`, which the bedroom engine never calls. The bedroom score is out of 100:
+
+| Component | Points | Measured as |
+| --- | --- | --- |
+| `door_access` | 20 | half the clear distance from the furniture to the door approach (0.45 m for full marks), half the share of pieces a walkway from the door reaches |
+| `open_space` | 25 | free floor in the middle of the room, the largest clear square, and the share of floor no walkway is cut off from |
+| `spacing` | 25 | the clear floor each piece needs — beside and at the foot of the bed, in front of storage and desks, behind a desk chair — half as the average and half as the tightest spot |
+| `table_near_wall` | 15 | study and dressing tables flush against a wall, halved for a study table that shares the bed's wall, zero when a requested one found no spot |
+| `nightstand_near_bed` | 15 | each nightstand within 0.1 m of the bed on its headboard wall, zero when a requested one found no spot |
+
+Gaps between pairs of pieces are deliberately not measured, because a nightstand beside the bed and a chair at its desk are meant to touch. Bedroom layouts return `scoreComponentMax`, which the web page uses to show each component as a percentage; living-room layouts keep their original components and card.
+
+Which six arrangements are shown is decided separately, by a planning rank (`_RANK_WEIGHTS`) that also weighs the rules the card does not show, such as how close the bed is to a window and how much daylight the study table gets. The six chosen layouts are then handed over in score order. Broken preferences subtract points and set `validity` to `"review"`: `bed_far_from_window` (more than 1 m from every window, growing with distance), `desk_on_bed_wall`, `storage_covers_window`, `blocked_access` (a piece no walkway reaches), `dead_floor` (at least 1 m² cut off, such as behind a bed that runs wall to wall), and `<item>_missing` for a required piece that found no clear spot. Layouts with the bed right by a window rank first, and the six results are different arrangements (a new bed position, or a piece on a different wall) rather than small nudges of one. Repeated furniture ids are merged into one quantity, because the legacy import lists each copy separately.
+
 ## API actions
 
 Project/import/calibration/generation/validation/save/export actions are available under `/api`. Review helpers preserve bounded wall offsets, ambiguous openings, shared doorway room IDs, and separate sealed extraction versus traversable navigation policies. Server JSON files are stored under `output/projects`.
 
-Post the polygon request to `POST /api/layouts/generate`. For a living room the constructive engine above runs; otherwise the algorithm samples deterministic grid candidates, rejects footprints outside concave polygons or inside holes, rejects collisions with furniture/fixed obstacles/opening keep-clear regions, checks portal circulation, removes duplicate layouts, scores feasible alternatives, and returns the best options in descending score order.
+Post the polygon request to `POST /api/layouts/generate`. For a living room or a bedroom the constructive engines above run; otherwise the algorithm samples deterministic grid candidates, rejects footprints outside concave polygons or inside holes, rejects collisions with furniture/fixed obstacles/opening keep-clear regions, checks portal circulation, removes duplicate layouts, scores feasible alternatives, and returns the best options in descending score order.
+
+The web page is stamped with a build ID each time it is served. If a browser tab still runs an older copy of the page (for example after the server was updated), `POST /api/layouts/generate` answers `409` and the page asks you to press Ctrl+F5 instead of showing results with the wrong score labels. Requests that do not come from a page served by this server, such as API clients, are never affected.
 
 If Node.js/npm is installed, the same server can be started with:
 

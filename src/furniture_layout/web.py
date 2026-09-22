@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import argparse, json, os, struct, zlib
+import argparse, hashlib, json, os, struct, zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -14,6 +14,13 @@ from .service import generate_layouts
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 WEB_ROOT, SAMPLE_FILE, PRESETS_FILE = PROJECT_ROOT/"web", PROJECT_ROOT/"examples"/"living_room.json", PROJECT_ROOT/"examples"/"room_presets.json"
 STORE, MAX_BODY = ProjectStore(PROJECT_ROOT/"output"/"projects"), 5_000_000
+PAGE_FILE = WEB_ROOT/"layouts-only.html"
+STALE_PAGE = "This page is out of date. Press Ctrl+F5 to reload it, then generate again."
+
+def _page_build(page:bytes)->str:return hashlib.sha256(page).hexdigest()[:12]
+
+def _served_page()->bytes:
+    page=PAGE_FILE.read_bytes();return page.replace(b"__PAGE_BUILD__",_page_build(page).encode())
 
 def _png(width:int,height:int,placements:list[dict])->bytes:
     width=max(100,min(2000,width));height=max(100,min(2000,height));pixels=bytearray([248,250,252,255]*width*height)
@@ -54,8 +61,7 @@ class DemoHandler(BaseHTTPRequestHandler):
             if path=="/api/presets":return self._send(200,PRESETS_FILE.read_bytes(),"application/json")
             if path=="/api/model":return self._json(200,inspect_model())
             if path.startswith("/api/projects/"):return self._json(200,STORE.load(path.rsplit("/",1)[-1]))
-            if path in ("/","/index.html"):return self._send(200,(WEB_ROOT/"layouts-only.html").read_bytes(),"text/html; charset=utf-8")
-            if path=="/layouts-only.html":return self._send(200,(WEB_ROOT/"layouts-only.html").read_bytes(),"text/html; charset=utf-8")
+            if path in ("/","/index.html","/layouts-only.html"):return self._send(200,_served_page(),"text/html; charset=utf-8")
             self._json(404,{"error":"Not found"})
         except (ValueError,ProjectValidationError) as error:self._json(400,{"error":str(error)})
     def do_POST(self)->None:
@@ -67,7 +73,9 @@ class DemoHandler(BaseHTTPRequestHandler):
             elif path=="/api/import/legacy":result=import_legacy(data.get("data",data),data.get("sourceName","legacy.json"))
             elif path=="/api/import/layout-project":result=legacy_layouts_to_project(data.get("data",data),data.get("sourceName","legacy.json"))
             elif path=="/api/calibrate":result=calibrate_scale(data["pointA"],data["pointB"],data["knownLength"],data["unit"])
-            elif path=="/api/layouts/generate":result=generate_polygon_layouts(data)
+            elif path=="/api/layouts/generate":
+                if self._stale_page():return self._json(409,{"error":STALE_PAGE})
+                result=generate_polygon_layouts(data)
             elif path=="/api/layouts/validate":result=validate_layout(data)
             elif path=="/api/geometry/snap":result={"segments":bounded_snap_segments(data.get("segments",[]),float(data.get("tolerancePx",4)))}
             elif path=="/api/openings/associate":result={"openings":associate_openings(data.get("openings",[]),data.get("walls",[]),data.get("rooms",[]),float(data.get("tolerancePx",8)))}
@@ -82,6 +90,11 @@ class DemoHandler(BaseHTTPRequestHandler):
             else:return self._json(404,{"error":"Not found"})
             self._json(200,result)
         except (json.JSONDecodeError,KeyError,TypeError,ValueError,NoValidLayoutError,ProjectValidationError) as error:self._json(400,{"error":str(error)})
+    def _stale_page(self)->bool:
+        # A tab opened before the page changed keeps running its old script, which would mislabel new results.
+        # Only a page this server served sends a same-host Referer, so API clients are never affected.
+        if urlparse(self.headers.get("Referer","")).netloc!=self.headers.get("Host"):return False
+        return self.headers.get("X-Page-Build")!=_page_build(PAGE_FILE.read_bytes())
     def log_message(self,format:str,*args:object)->None:print(f"{self.address_string()} - {format % args}")
 
 def main()->int:

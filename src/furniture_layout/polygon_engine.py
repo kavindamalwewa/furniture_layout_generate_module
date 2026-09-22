@@ -255,10 +255,13 @@ def generate_polygon_layouts(request: dict[str, Any]) -> dict[str, Any]:
         raise ProjectValidationError("A confirmed two-point scale is required before layout generation")
     polygon=request.get("polygon")
     if not polygon: raise ProjectValidationError("A reviewed room polygon is required before layout generation")
+    from .bedroom import generate_bedroom_layouts, has_bed, is_bedroom_type
     from .living_room import LIVING_ROOM_TYPES, generate_living_room_layouts, infer_room_type
     room_type=str(request.get("roomType") or request.get("room_type") or "").strip().lower().replace(" ","-").replace("_","-")
-    if not room_type: room_type=infer_room_type(request.get("furniture",[]))
+    furniture=request.get("furniture",[])
+    if not room_type: room_type=infer_room_type(furniture) or ("bedroom" if has_bed(furniture) else "")
     if room_type in LIVING_ROOM_TYPES: return generate_living_room_layouts(request)
+    if is_bedroom_type(room_type) and has_bed(furniture): return generate_bedroom_layouts(request)
     revision=int(request.get("inputRevision",0)); seed=int(request.get("seed",0)); budget_ms=min(10_000,max(50,int(request.get("searchBudgetMs",1500))))
     meters_per_unit=float(request.get("scale",{}).get("metersPerPixel",1.0))
     if meters_per_unit <= 0: raise ProjectValidationError("scale.metersPerPixel must be positive")

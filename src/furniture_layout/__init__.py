@@ -8,6 +8,7 @@ from .models import (
     Point,
     Room,
 )
+from .bedroom import generate_bedroom_layouts
 from .living_room import generate_living_room_layouts
 from .optimizer import LayoutOptimizer, NoValidLayoutError
 from .polygon_engine import generate_polygon_layouts, validate_layout
@@ -22,6 +23,7 @@ __all__ = [
     "Placement",
     "Point",
     "Room",
+    "generate_bedroom_layouts",
     "generate_layouts",
     "generate_living_room_layouts",
     "generate_polygon_layouts",
